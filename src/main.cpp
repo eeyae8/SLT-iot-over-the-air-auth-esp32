@@ -12,11 +12,16 @@ const char* github_raw_url = "https://raw.githubusercontent.com/eeyae8/SLT-iot-o
 Preferences preferences;
 String current_version;
 
+// Function prototypes
+void checkForUpdates();
+void updateFirmware(String firmware_url, String new_version);
+
 void setup() {
   Serial.begin(115200);
   
   preferences.begin("firmware", false);
   current_version = preferences.getString("version", "1.0.0"); // Default to 1.0.0 if not set
+  Serial.println("Running firmware version 1.0.1");
   Serial.println("Current firmware version: " + current_version);
   
   WiFi.begin(ssid, password);
@@ -101,5 +106,5 @@ void updateFirmware(String firmware_url, String new_version) {
 
 void loop() {
   checkForUpdates();
-  delay(60000); // Check for updates every minute
+  delay(10000); // Check for updates every minute
 }
