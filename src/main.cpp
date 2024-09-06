@@ -1,69 +1,172 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <Update.h>
-#include <Preferences.h>
+#include <SPIFFS.h>
+#include <ArduinoJson.h>
 
-const char* ssid = "AndroidAPDCE4";
-const char* password = "clwu1277";
+//version1.2
+
+const char* WIFI_FILE = "/wifi_creds.json";
 const char* github_raw_url = "https://raw.githubusercontent.com/eeyae8/SLT-iot-over-the-air-auth-esp32/main/firmware_info.json";
 
-Preferences preferences;
-String current_version;
-
-// Function prototypes
+void loadWiFiCredentials();
+void saveWiFiCredentials(const char* ssid, const char* password);
+void connectToWiFi();
+void getWiFiCredentials();
 void checkForUpdates();
-void updateFirmware(String firmware_url, String new_version);
+void updateFirmware(const char* firmware_url, const char* new_version);
 
 void setup() {
   Serial.begin(115200);
-  
-  preferences.begin("firmware", false);
-  current_version = preferences.getString("version", "1.0.0"); // Default to 1.0.0 if not set
-  Serial.println("Running firmware version 1.0.1");
-  Serial.println("Current firmware version: " + current_version);
-  
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
   }
-  Serial.println("Connected to WiFi");
+
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An error occurred while mounting SPIFFS");
+    Serial.println("Formatting SPIFFS...");
+    if (SPIFFS.format()) {
+      Serial.println("SPIFFS formatted successfully");
+      if (!SPIFFS.begin(true)) {
+        Serial.println("SPIFFS mount failed after formatting");
+        return;
+      }
+    } else {
+      Serial.println("SPIFFS formatting failed");
+      return;
+    }
+  }
+
+  loadWiFiCredentials();
+  connectToWiFi();
+
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+}
+
+void loadWiFiCredentials() {
+  if (SPIFFS.exists(WIFI_FILE)) {
+    File file = SPIFFS.open(WIFI_FILE, "r");
+    if (file) {
+      StaticJsonDocument<256> doc;
+      DeserializationError error = deserializeJson(doc, file);
+      file.close();
+
+      if (!error) {
+        const char* ssid = doc["ssid"];
+        const char* password = doc["password"];
+        if (ssid && password) {
+          WiFi.begin(ssid, password);
+          Serial.println("Loaded WiFi credentials:");
+          Serial.println("SSID: " + String(ssid));
+          Serial.println("Password: [hidden]");
+          return;
+        }
+      }
+    }
+  }
+  
+  Serial.println("No valid WiFi credentials found.");
+  getWiFiCredentials();
+}
+
+void saveWiFiCredentials(const char* ssid, const char* password) {
+  File file = SPIFFS.open(WIFI_FILE, "w");
+  if (file) {
+    StaticJsonDocument<256> doc;
+    doc["ssid"] = ssid;
+    doc["password"] = password;
+    serializeJson(doc, file);
+    file.close();
+    Serial.println("WiFi credentials saved.");
+    Serial.println("SSID: " + String(ssid));
+  } else {
+    Serial.println("Failed to open file for writing");
+  }
+}
+
+void getWiFiCredentials() {
+  Serial.println("Enter WiFi credentials:");
+  
+  Serial.print("SSID: ");
+  String ssid = "";
+  while (true) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n') {
+        break;
+      }
+      ssid += c;
+    }
+  }
+  ssid.trim();
+
+  Serial.print("Password: ");
+  String password = "";
+  while (true) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n') {
+        break;
+      }
+      password += c;
+    }
+  }
+  password.trim();
+
+  Serial.println("SSID entered: " + ssid);
+  Serial.println("Password entered: " + String(password.length()) + " characters");
+
+  saveWiFiCredentials(ssid.c_str(), password.c_str());
+  WiFi.begin(ssid.c_str(), password.c_str());
+}
+
+void connectToWiFi() {
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected to WiFi");
+    Serial.println("IP address: " + WiFi.localIP().toString());
+  } else {
+    Serial.println("\nFailed to connect. Please check your credentials.");
+    getWiFiCredentials();
+    connectToWiFi();  // Try to connect again with new credentials
+  }
 }
 
 void checkForUpdates() {
   HTTPClient http;
   http.begin(github_raw_url);
+
   int httpCode = http.GET();
   
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, payload);
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, payload);
     
-    String new_version = doc["version"].as<String>();
-    String firmware_url = doc["url"].as<String>();
-    
-    Serial.println("Current version: " + current_version);
-    Serial.println("Available version: " + new_version);
-    
-    if (new_version > current_version) {
-      Serial.println("New firmware version available");
-      updateFirmware(firmware_url, new_version);
-    } else {
-      Serial.println("Firmware is up to date");
+    if (!error) {
+      const char* new_version = doc["version"];
+      const char* firmware_url = doc["url"];
+      // Compare versions and update if necessary
+      // This is a simplified version check. You might want to implement a more robust version comparison.
+      if (strcmp(new_version, "CURRENT_VERSION") > 0) {
+        updateFirmware(firmware_url, new_version);
+      }
     }
-  } else {
-    Serial.println("Failed to check for updates");
   }
-  
   http.end();
 }
 
-void updateFirmware(String firmware_url, String new_version) {
+void updateFirmware(const char* firmware_url, const char* new_version) {
   HTTPClient http;
   http.begin(firmware_url);
+
   int httpCode = http.GET();
   
   if (httpCode == HTTP_CODE_OK) {
@@ -75,36 +178,26 @@ void updateFirmware(String firmware_url, String new_version) {
         size_t written = Update.writeStream(*stream);
         if (written == contentLength) {
           Serial.println("Written : " + String(written) + " successfully");
-        } else {
-          Serial.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
-        }
-        if (Update.end()) {
-          Serial.println("OTA done!");
-          if (Update.isFinished()) {
-            Serial.println("Update successfully completed. Rebooting.");
-            preferences.putString("version", new_version);
-            preferences.end();
+          if (Update.end()) {
+            Serial.println("OTA update complete");
+            // Here you could save the new version to SPIFFS if needed
             ESP.restart();
-          } else {
-            Serial.println("Update not finished? Something went wrong!");
           }
-        } else {
-          Serial.println("Error Occurred. Error #: " + String(Update.getError()));
         }
-      } else {
-        Serial.println("Not enough space to begin OTA");
       }
-    } else {
-      Serial.println("There was no content in the response");
     }
-  } else {
-    Serial.println("Firmware download failed");
   }
-  
   http.end();
 }
 
 void loop() {
-  checkForUpdates();
-  delay(10000); // Check for updates every minute
+  if (WiFi.status() == WL_CONNECTED) {
+    checkForUpdates();
+  } else {
+    Serial.println("WiFi connection lost. Reconnecting...");
+    connectToWiFi();
+  }
+  
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+  delay(60000); // Check every minute
 }
