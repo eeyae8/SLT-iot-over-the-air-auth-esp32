@@ -21,6 +21,7 @@ String getCurrentVersion();
 void saveCurrentVersion(const char* version);
 bool getUserConfirmation();
 void performUpdate();
+bool checkFirmwareSize(size_t firmwareSize);
 
 void setup() {
   Serial.begin(115200); // Initialize the serial communication at a baud rate of 115200
@@ -209,51 +210,87 @@ bool checkForUpdates() {
   return false;
 }
 
-void updateFirmware(const char* firmware_url, const char* new_version) {
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.begin(firmware_url); // Connect to the firmware URL
-  int httpCode = http.GET(); // Send a GET request to download the firmware
-  
-  if (httpCode == HTTP_CODE_OK) {
-    int contentLength = http.getSize(); // Get the content length of the firmware
-    if (contentLength > 0) {
-      bool canBegin = Update.begin(contentLength); // Begin the OTA update process
-      if (canBegin) {
-        Serial.println("Begin OTA update...");
-        WiFiClient * stream = http.getStreamPtr(); // Get the HTTP stream
-        size_t written = Update.writeStream(*stream); // Write the firmware to the OTA update
-        if (written == contentLength) {
-          Serial.println("OTA update written successfully");
-          if (Update.end()) { // Finish the OTA update process
-            Serial.println("OTA update completed successfully");
-            saveCurrentVersion(new_version); // Save the new version to a file
-            Serial.println("Rebooting...");
-            ESP.restart(); // Restart the ESP8266
-          } else {
-            Serial.printf("OTA update failed. Error: %u\n", Update.getError());
-          }
-        } else {
-          Serial.printf("OTA update failed. Written %d / %d bytes\n", written, contentLength);
-        }
-      } else {
-        Serial.println("Not enough space to begin OTA update");
-      }
+/*
+Memory Checks are very useful. There are many types. I have only included free sketch space and freeheap elsewhere as the former 
+effects the size of the .bin file we can download, and dynamic memory is always good to track. Here's a few others you may consider.
+
+1. Free Stack: ESP.getFreeContStack() - This function returns the amount of free stack memory available on the ESP32.
+2. Free PSRAM: ESP.getFreePsram() - This function returns the amount of free PSRAM available on the ESP32.
+3. Total Flash: ESP.getFlashChipSize() - This function returns the total amount of flash memory available on the ESP32.
+
+etc.
+ASE :)
+*/
+
+bool checkFirmwareSize(size_t firmwareSize) { //Free sketch space is what effects the OTA update download
+    size_t freeSketchSpace = ESP.getFreeSketchSpace();
+    
+    Serial.printf("Free Sketch Space: %u bytes\n", freeSketchSpace);
+    Serial.printf("New Firmware Size: %u bytes\n", firmwareSize);
+
+    if (firmwareSize > freeSketchSpace) {
+        Serial.println("WARNING: New firmware is larger than available space!");
+        Serial.printf("Additional space needed: %u bytes\n", firmwareSize - freeSketchSpace);
+        return false;
     } else {
-      Serial.println("Error: Firmware content length is 0");
+        Serial.printf("Available space after update: %u bytes\n", freeSketchSpace - firmwareSize);
+        return true;
     }
-  } else {
-    Serial.printf("Firmware download failed, HTTP error: %s\n", http.errorToString(httpCode).c_str());
-  }
-  
-  http.end(); // Close the HTTP connection
+}
+
+void updateFirmware(const char* firmware_url, const char* new_version) {
+    HTTPClient http;
+    http.begin(firmware_url);
+    int httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        int contentLength = http.getSize();
+        
+        if (contentLength <= 0) {
+            Serial.println("Error: Invalid content length for firmware");
+            http.end();
+            return;
+        }
+
+        if (!checkFirmwareSize(contentLength)) {
+            Serial.println("Error: Not enough space for new firmware");
+            http.end();
+            return;
+        }
+
+        bool canBegin = Update.begin(contentLength);
+        if (canBegin) {
+            Serial.println("Begin OTA update...");
+            WiFiClient * stream = http.getStreamPtr();
+            size_t written = Update.writeStream(*stream);
+            if (written == contentLength) {
+                Serial.println("OTA update written successfully");
+                if (Update.end()) {
+                    Serial.println("OTA update completed successfully");
+                    saveCurrentVersion(new_version);
+                    Serial.println("Rebooting...");
+                    ESP.restart();
+                } else {
+                    Serial.printf("OTA update failed. Error: %u\n", Update.getError());
+                }
+            } else {
+                Serial.printf("OTA update failed. Written %d / %d bytes\n", written, contentLength);
+            }
+        } else {
+            Serial.println("Not enough space to begin OTA update");
+        }
+    } else {
+        Serial.printf("Firmware download failed, HTTP error: %s\n", http.errorToString(httpCode).c_str());
+    }
+    
+    http.end();
 }
 
 /*
 For the following function getUserConfirmation, I have used a user keyboard input of either 0 or 1 to confirm or decline the update.
 In the future this will be replaced with an actual physical button so please adjust the code accordingly.
 Thanks.
-ASE >:)
+ASE :)
 */
 
 bool getUserConfirmation() {
