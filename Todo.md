@@ -1,0 +1,3 @@
+-Check how to do with 4G module
+-Maybe make a html page for input wifi? how to make secure? 
+-Edit so asks user using something in the place of a 'button push' whether to update to new firmware or not. 
