@@ -6,11 +6,37 @@
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 
-// version 1.0.5
+// version 1.0.3
 
 const char* WIFI_FILE = "/wifi_creds.json";
 const char* VERSION_FILE = "/firmware_version.txt";
 const char* firmware_info_url = "https://raw.githubusercontent.com/eeyae8/SLT-iot-over-the-air-auth-esp32/main/firmware_info.json";
+
+// Root CA certificate for GitHub
+const char* rootCACertificate = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD
+QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB
+CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97
+nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt
+43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P
+T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4
+gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO
+BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR
+TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw
+DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr
+hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg
+06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF
+PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls
+YSEY1QSteDwsOoBrp+uvFRTp2InBuThs4pFsiv9kuXclVzDAGySj4dzp30d8tbQk
+CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=
+-----END CERTIFICATE-----
+)EOF";
 
 void loadWiFiCredentials();
 void saveWiFiCredentials(const char* ssid, const char* password);
@@ -23,6 +49,7 @@ void saveCurrentVersion(const char* version);
 bool getUserConfirmation();
 void performUpdate();
 bool checkFirmwareSize(size_t firmwareSize);
+void setupSecureClient(WiFiClientSecure &client);
 
 void setup() {
   Serial.begin(115200);
@@ -53,6 +80,11 @@ void setup() {
 
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
 }
+
+void setupSecureClient(WiFiClientSecure &client) {
+  client.setCACert(rootCACertificate);
+}
+
 
 String getCurrentVersion() {
   if (SPIFFS.exists(VERSION_FILE)) {
@@ -175,102 +207,114 @@ void connectToWiFi() {
 bool checkForUpdates() {
   Serial.println("Checking for updates...");
   WiFiClientSecure *client = new WiFiClientSecure;
-  client->setInsecure(); // Skip certificate verification
-
-  HTTPClient https;
-  https.begin(*client, firmware_info_url);
-
-  int httpCode = https.GET();
-  Serial.printf("HTTPS response code: %d\n", httpCode);
-  
-  if (httpCode == HTTP_CODE_OK) {
-    String payload = https.getString();
-    Serial.println("Received payload: " + payload);
+  if(client) {
+    setupSecureClient(*client);
     
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (!error) {
-      const char* new_version = doc["version"];
-      const char* firmware_url = doc["url"];
-      String current_version = getCurrentVersion();
-      Serial.printf("Current version: %s\n", current_version.c_str());
-      Serial.printf("Available version: %s\n", new_version);
+    {
+      HTTPClient https;
       
-      if (String(new_version) > current_version) {
-        Serial.println("New version available.");
-        updateFirmware(firmware_url, new_version);
+      Serial.print("[HTTPS] begin...\n");
+      if (https.begin(*client, firmware_info_url)) {
+        Serial.print("[HTTPS] GET...\n");
+        int httpCode = https.GET();
+        if (httpCode > 0) {
+          Serial.printf("[HTTPS] GET... code: %d\n", httpCode);
+          if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+            String payload = https.getString();
+            Serial.println(payload);
+            
+            StaticJsonDocument<512> doc;
+            DeserializationError error = deserializeJson(doc, payload);
+            
+            if (!error) {
+              const char* new_version = doc["version"];
+              const char* firmware_url = doc["url"];
+              String current_version = getCurrentVersion();
+              Serial.printf("Current version: %s\n", current_version.c_str());
+              Serial.printf("Available version: %s\n", new_version);
+              
+              if (String(new_version) > current_version) {
+                Serial.println("New version available.");
+                https.end();
+                delete client;
+                if (getUserConfirmation()) {
+                  updateFirmware(firmware_url, new_version);
+                  return true;
+                }
+                return false;
+              } else {
+                Serial.println("Firmware is up to date.");
+              }
+            } else {
+              Serial.println("JSON parsing failed");
+            }
+          }
+        } else {
+          Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+        }
         https.end();
-        delete client;
-        return true;
       } else {
-        Serial.println("Firmware is up to date.");
+        Serial.printf("[HTTPS] Unable to connect\n");
       }
-    } else {
-      Serial.println("JSON parsing failed");
     }
+    delete client;
   } else {
-    Serial.printf("Failed to connect to update server. Error: %s\n", https.errorToString(httpCode).c_str());
+    Serial.println("Unable to create client");
   }
-  https.end();
-  delete client;
   return false;
 }
 
 void updateFirmware(const char* firmware_url, const char* new_version) {
   WiFiClientSecure *client = new WiFiClientSecure;
-  client->setInsecure(); // Skip certificate verification
-
-  HTTPClient https;
-  https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  https.begin(*client, firmware_url);
-  int httpCode = https.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-    int contentLength = https.getSize();
+  if(client) {
+    setupSecureClient(*client);
     
-    if (contentLength <= 0) {
-      Serial.println("Error: Invalid content length for firmware");
-      https.end();
-      delete client;
-      return;
-    }
-
-    if (!checkFirmwareSize(contentLength)) {
-      Serial.println("Error: Not enough space for new firmware");
-      https.end();
-      delete client;
-      return;
-    }
-
-    WiFiClient * stream = https.getStreamPtr();
-
-    bool canBegin = Update.begin(contentLength);
-    if (canBegin) {
-      Serial.println("Begin OTA update...");
-      size_t written = Update.writeStream(*stream);
-      if (written == contentLength) {
-        Serial.println("OTA update written successfully");
-        if (Update.end()) {
-          Serial.println("OTA update completed successfully");
-          saveCurrentVersion(new_version);
-          Serial.println("Rebooting...");
-          ESP.restart();
+    {
+      HTTPClient https;
+      if (https.begin(*client, firmware_url)) {
+        int httpCode = https.GET();
+        if (httpCode > 0) {
+          if (httpCode == HTTP_CODE_OK) {
+            int contentLength = https.getSize();
+            if (contentLength > 0) {
+              bool canBegin = Update.begin(contentLength);
+              if (canBegin) {
+                WiFiClient * stream = https.getStreamPtr();
+                size_t written = Update.writeStream(*stream);
+                if (written == contentLength) {
+                  Serial.println("Written : " + String(written) + " successfully");
+                } else {
+                  Serial.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
+                }
+                if (Update.end()) {
+                  Serial.println("OTA done!");
+                  if (Update.isFinished()) {
+                    Serial.println("Update successfully completed. Rebooting.");
+                    saveCurrentVersion(new_version);
+                    ESP.restart();
+                  } else {
+                    Serial.println("Update not finished? Something went wrong!");
+                  }
+                } else {
+                  Serial.println("Error Occurred. Error #: " + String(Update.getError()));
+                }
+              } else {
+                Serial.println("Not enough space to begin OTA");
+              }
+            } else {
+              Serial.println("There was no content in the response");
+            }
+          } else {
+            Serial.println("Error on HTTP request");
+          }
         } else {
-          Serial.printf("OTA update failed. Error: %u\n", Update.getError());
+          Serial.println("Error on HTTP request");
         }
-      } else {
-        Serial.printf("OTA update failed. Written %d / %d bytes\n", written, contentLength);
+        https.end();
       }
-    } else {
-      Serial.println("Not enough space to begin OTA update");
     }
-  } else {
-    Serial.printf("Firmware download failed, HTTPS error: %s\n", https.errorToString(httpCode).c_str());
+    delete client;
   }
-  
-  https.end();
-  delete client;
 }
 
 bool checkFirmwareSize(size_t firmwareSize) {
@@ -315,11 +359,7 @@ bool getUserConfirmation() {
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("WiFi connected. Checking for updates...");
-    if(checkForUpdates()) {
-      if (getUserConfirmation()) {
-        performUpdate();
-      }
-    }
+    checkForUpdates();
   } else {
     Serial.println("WiFi connection lost. Reconnecting...");
     connectToWiFi();
@@ -328,34 +368,4 @@ void loop() {
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
   Serial.println("Waiting for next update check...");
   delay(60000); // Check for updates every minute
-}
-
-void performUpdate() {
-  WiFiClientSecure *client = new WiFiClientSecure;
-  client->setInsecure(); // Skip certificate verification
-
-  HTTPClient https;
-  https.begin(*client, firmware_info_url);
-  int httpCode = https.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-    String payload = https.getString();
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (!error) {
-      const char* new_version = doc["version"];
-      const char* firmware_url = doc["url"];
-      Serial.printf("New version: %s\n", new_version);
-      Serial.printf("Firmware URL: %s\n", firmware_url);
-      updateFirmware(firmware_url, new_version);
-    } else {
-      Serial.println("Failed to deserialize JSON");
-    }
-  } else {
-    Serial.printf("HTTP GET failed, error: %s\n", https.errorToString(httpCode).c_str());
-  }
-  
-  https.end();
-  delete client;
 }
