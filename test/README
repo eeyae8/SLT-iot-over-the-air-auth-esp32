@@ -59,3 +59,8 @@ loop(): Maintains WiFi and MQTT connections, checks for firmware updates every 5
 - A protocol for dealing with an interruption mid-update (cable disconnect, wifi disconnect etc).
 
 - HTTPS. I attempted this but it refused to read the certificate. I used digicert since Github apparently used them as well. Ideally this would be stored in SPIFFs. Make sure to partition is correctly otherwise it will overwrite the WiFi ssid and password files when you flash to the esp32. Ideally you would use a .pem format within the github repo. 
+
+## HTTPS Implementation
+- You may use any well-known ssl certificate providers (such as digicert) or get the Github Server Certificate
+- For testing purposes the certificate can be embedded in the code itself however it is better to save the certificate as a .pem file in the repo (for example: '/data/certs/github.pem')
+- Get rid of all cases of 'client->setInsecure();'
