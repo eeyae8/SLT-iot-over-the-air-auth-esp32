@@ -9,3 +9,53 @@ in the development cycle.
 
 More information about PlatformIO Unit Testing:
 - https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
+### Amandi Sevmini Edirisinghe
+### SLT Digital Lab Internship - IIoT Project
+### September 2024
+
+### ESP32 OTA Firmware Update via Wifi
+
+## Setup
+1. Change the firmware_info.json file link to your username and repo and adjust the link to your releases page
+2. Change the link on the main.cpp file to your github repo and username
+
+## How to carry out an update
+- For the purposes of testing I have simulated an 'update' on github releases. 
+- Upload a firmware.bin file (found under .pio/build/esp32dev) to your github releases.Tag it v1.0.$(NUMBER). $(NUMBER) being the version number you're on 
+- Then update the firmware_info.json file ON GITHUB (the remote version) to match the tag
+- Your local firmware_info.json will have to have the older version of the release for esp32 to update
+- In reality the firmware and json file will be updated some other way so all you'd need to do is re- upload + monitor on your esp32.
+
+## Explanation of cpp functions:
+
+# WiFi Management
+loadWiFiCredentials(): Reads WiFi credentials from SPIFFS and attempts to connect. If no credentials exist, it prompts the user to enter them.
+saveWiFiCredentials(const char* ssid, const char* password): Saves WiFi credentials to SPIFFS.
+getWiFiCredentials(): Prompts the user to enter WiFi SSID and password via the serial monitor and saves them.
+connectToWiFi(): Attempts to connect to WiFi, retrying up to 20 times. If unsuccessful, it asks the user for new credentials and tries again.
+
+# Firmware Update (OTA) Functions
+getCurrentVersion(): Reads the current firmware version from SPIFFS.
+saveCurrentVersion(const char* version): Saves the new firmware version to SPIFFS after a successful update.
+checkForUpdates(): Fetches the latest firmware version info from GitHub and compares it with the current version. If a newer version exists, it initiates an update.
+updateFirmware(const char* firmware_url, const char* new_version): Downloads and installs the new firmware using the ESP32 OTA update process.
+checkFirmwareSize(size_t firmwareSize): Ensures that there is enough flash memory available before performing an OTA update.
+getUserConfirmation(): Asks the user via the serial monitor whether they want to proceed with the firmware update.
+
+# MQTT Functions
+connectMQTT(): Connects the ESP32 to an MQTT broker and subscribes to a topic.
+messageReceived(String &topic, String &payload): Handles incoming MQTT messages.
+publishCount(): Publishes a counter value (1 to 10) to an MQTT topic every 5 seconds.
+
+# Main Loop and Setup
+setup(): Initializes the serial monitor, SPIFFS, WiFi, and MQTT. It also prints the available heap memory.
+loop(): Maintains WiFi and MQTT connections, checks for firmware updates every 5 minutes, and publishes MQTT messages every 5 seconds.
+
+
+## Problems to be improved upon
+- I initially added a means to deal with the Wi-Fi connection being interrupted but seeing as the final project is meant to swap between Wi-Fi and LTE I scrapped my ideas. Currently when it disconnects it will try to reconnect. It repeatedly prints the disconnect message. A good idea would be to make it more streamlined with just one error message? 
+
+- A protocol for dealing with an interruption mid-update (cable disconnect, wifi disconnect etc).
+
+- HTTPS. I attempted this but it refused to read the certificate. I used digicert since Github apparently used them as well. Ideally this would be stored in SPIFFs. Make sure to partition is correctly otherwise it will overwrite the WiFi ssid and password files when you flash to the esp32. Ideally you would use a .pem format within the github repo. 
